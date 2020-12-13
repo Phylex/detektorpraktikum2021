@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# add custom data folders to the ignore list
+.Alignment-Sr90
+.Infomaterial
+.LatencyScan
+.Muon-Runs
