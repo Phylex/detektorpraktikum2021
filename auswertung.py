@@ -191,11 +191,12 @@ def generate_coordinates_from_map(hitmap_hits):
         return np.meshgrid(hxc, hyc)
 
 
-def project_hits_onto_axis(hitmap):
+def project_hits_onto_axis(hitmap, coordinates):
     """ projects the 2D hitmap onto two histograms
 
     Function that projects the 2D hitmap onto histograms
-    for the x and y axis.
+    for the x and y axis. The histograms are normalized by the
+    function as to make fitting a normalized gauss easier
 
     Args:
         hitmap_hits: 2D array like
@@ -208,12 +209,22 @@ def project_hits_onto_axis(hitmap):
         y_projection: np.array
             the projection of the hitmap onto the y axis
     """
+    # calculate the projections
     x_projection = []
     for row in hitmap:
         x_projection.append(sum(row))
     y_projection = []
     for row in hitmap.T:
         y_projection.append(sum(row))
+    # normalize the projections
+    x_bin_edges = coordinates[0][0]
+    x_bin_widths = x_bin_edges[1:] - x_bin_edges[:-1]
+    y_bin_edges = coordinates[1][:, 0]
+    y_bin_widths = y_bin_edges[1:] - y_bin_edges[:-1]
+    x_projection = np.array([val/sum(x_projection) for val in x_projection])
+    y_projection = np.array([val/sum(y_projection) for val in y_projection])
+    x_projection /= x_bin_widths
+    y_projection /= y_bin_widths
     return x_projection, y_projection
 
 
@@ -262,9 +273,15 @@ if __name__ == "__main__":
             PATH = '/'.join([ALIGNMENT_DIR, snsdir, fpath])
             data, names = get_alignment_data(PATH)
             hitmap_hits = merge_data(names, data)
-            hitmaps.append(("/".join([snsdir, fpath]), merge_data(names, data),
-                           generate_coordinates_from_map(hitmap_hits)))
+            hitmaps.append(["/".join([snsdir, fpath]), merge_data(names, data),
+                           generate_coordinates_from_map(hitmap_hits)])
 
     # now that we have the data we need to fit the Gaussian distributions to
     # the data.
+    for (hpath, hmap, coordinates) in hitmaps:
+        x_popt, x_pcov, y_popt, y_pcov = fit_gauss_indipendently(hmap,
+                                                                 coordinates)
+        print(x_popt, y_popt)
+
+
 
