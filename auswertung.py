@@ -14,6 +14,8 @@ the sensor
 import uproot as ur
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy.optimize as opt
+from scipy.stats import norm
 
 LS_DIR = 'LatencyScan'
 LScan_range_top = [format(elem, '03d') for elem in range(0, 157)]
@@ -157,16 +159,122 @@ def merge_data(sensor_names, sensor_data):
     return hitmap
 
 
+def generate_coordinates_from_map(hitmap_hits):
+    """Function that generates the coordinate map for the hit histogram
+
+    this function detects the orientation of the sensor (upright or lying on
+    it's side and generates the corresponding positions)
+
+    Args:
+        hitmap_hits np.array: This is essentially the histogram with the hits
+
+    Returns:
+        coordinates np.array: two arrays, one for the x and one for the y
+            coordinate of the hitmap bin center so that everything is index
+            matched (it can be displayed with the help of matplotlibs 3D axis)
+    """
+    rows, cols = hitmap_hits.shape
+    # determine the orientation of the sensor
+    # the sensor is upright the x axis is the short side
+    if rows > cols:
+        h_x = [0 if i == 0 else (300+(i-1)*150)*10**-6 for i in range(0,
+               rows)]
+        h_x.append((600+150*50)*10**-6)
+        h_x = np.array(h_x)
+        h_y = [(i*100+100)*10**-6 if i == cols else (i*100)*10**-6 for i in
+               range(0, cols+1)]
+        h_y = np.array(h_y)
+        hxc = (h_x[1:] + h_x[:-1])/2
+        hyc = (h_y[1:] + h_y[:-1])/2
+        return np.meshgrid(hyc, hxc)
+    # the sensor is lying on its side (the x axis is the long axis
+    else:
+        h_y = [0 if i == 0 else (300+(i-1)*150)*10**-6 for i in range(0,
+               rows)]
+        h_y.append((600+150*50)*10**-6)
+        h_y = np.array(h_x)
+        h_x = [(i*100+100)*10**-6 if i == cols else (i*100)*10**-6 for i in
+               range(0, cols+1)]
+        h_x = np.array(h_y)
+        hxc = (h_x[1:] + h_x[:-1])/2
+        hyc = (h_y[1:] + h_y[:-1])/2
+        return np.meshgrid(hxc, hyc)
+
+
+def project_hits_onto_axis(hitmap):
+    """ projects the 2D hitmap onto two histograms
+
+    Function that projects the 2D hitmap onto histograms
+    for the x and y axis.
+
+    Args:
+        hitmap_hits: 2D array like
+            the hitmap of the sensor that is to be projected
+            onto the axis
+
+    Returns:
+        x_projection: np.array
+            the projection of the hitmap onto the x axis
+        y_projection: np.array
+            the projection of the hitmap onto the y axis
+    """
+    x_projection = []
+    for row in hitmap:
+        x_projection.append(sum(row))
+    y_projection = []
+    for row in hitmap.T:
+        y_projection.append(sum(row))
+    return x_projection, y_projection
+
+
+def fit_gauss_indipendently(hitmap, hitmap_coordinates):
+    """ fits a gauss curve to the projection of the map onto it's axis
+
+    This function takes the hitmap of the sensor with the hits from the
+    alignment exposure and tries to fit a gaussian pdf onto the projection
+    of the hitmap onto each of it's axis.
+
+    Args:
+        hitmap: 2D array like
+            The hitmap of the sensor
+        hitmap_coordinates: 2 2D arrays
+            output of np.meshgrid for the x and the y coordinates
+
+    Returns:
+        x_popt: tuple of floats
+            mean and sigma for the x-axis projection fit
+        x_pcov: 2D Array
+            covariance matrix for the x-axis projection
+        y_popt: tuple of floats
+            mean and sigma for the y-axis projection fit
+        y_pcov: 2D Array
+            covariance matrix for the y-axis projection
+    """
+    x_proj, y_proj = project_hits_onto_axis(hitmap)
+    x_coord = hitmap_coordinates[0, 0, :]
+    y_coord = hitmap_coordinates[0, :, 0]
+    x_popt, x_pcov = opt.curve_fit(norm.pdf, x_coord, x_proj, p0=(np.median(
+                                   x_coord), 10*(x_coord[2]-x_coord[1])))
+    y_popt, y_pcov = opt.curve_fit(norm.pdf, y_coord, y_proj, p0=(np.median(
+                                   y_coord), 10*(y_coord[2]-y_coord[1])))
+    return x_popt, x_pcov, y_popt, y_pcov
+
+
 if __name__ == "__main__":
     # perform alignment of sensor
     # extract data from the alignment files we are only interested in the
     # hit maps, also remap and merge the data from the sensors into a hit
     # map for every sensor
     alignment_datasets = []
+    hitmaps = []
     for snsdir in SNSR_DIRS:
         for fpath in Align_files:
             PATH = '/'.join([ALIGNMENT_DIR, snsdir, fpath])
             data, names = get_alignment_data(PATH)
-            hitmap = merge_data(names, data)
+            hitmap_hits = merge_data(names, data)
+            hitmaps.append(("/".join([snsdir, fpath]), merge_data(names, data),
+                           generate_coordinates_from_map(hitmap_hits)))
+
     # now that we have the data we need to fit the Gaussian distributions to
     # the data.
+
