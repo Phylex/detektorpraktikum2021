@@ -177,25 +177,15 @@ def generate_coordinates_from_map(hitmap_hits):
     # determine the orientation of the sensor
     # the sensor is upright the x axis is the short side
     if rows > cols:
-        h_x = [0 if i == 0 else (300+(i-1)*150)*10**-6 for i in range(0,
-               rows)]
-        h_x.append((600+150*50)*10**-6)
-        h_x = np.array(h_x)
-        h_y = [(i*100+100)*10**-6 if i == cols else (i*100)*10**-6 for i in
-               range(0, cols+1)]
-        h_y = np.array(h_y)
+        h_x = np.array([i*150*10**-6 for i in range(rows+1)])
+        h_y = np.array([i*100*10**-6 for i in range(cols+1)])
         hxc = (h_x[1:] + h_x[:-1])/2
         hyc = (h_y[1:] + h_y[:-1])/2
         return np.meshgrid(hyc, hxc)
     # the sensor is lying on its side (the x axis is the long axis
     else:
-        h_y = [0 if i == 0 else (300+(i-1)*150)*10**-6 for i in range(0,
-               rows)]
-        h_y.append((600+150*50)*10**-6)
-        h_y = np.array(h_x)
-        h_x = [(i*100+100)*10**-6 if i == cols else (i*100)*10**-6 for i in
-               range(0, cols+1)]
-        h_x = np.array(h_y)
+        h_y = np.array([i*150*10**-6 for i in range(rows+1)])
+        h_x = np.array([i*100*10**-6 for i in range(cols+1)])
         hxc = (h_x[1:] + h_x[:-1])/2
         hyc = (h_y[1:] + h_y[:-1])/2
         return np.meshgrid(hxc, hyc)
