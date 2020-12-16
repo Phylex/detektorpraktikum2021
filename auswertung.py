@@ -193,8 +193,8 @@ def generate_coordinates_from_map(hitmap_hits):
 
 def extract_axis_from_mesh(coordinates):
     "extracts the axis points from the coordinates of the hit"
-    x = coordinates[0][0]
-    y = coordinates[1][:, 0]
+    y = coordinates[0][0]
+    x = coordinates[1][:, 0]
     return x, y
 
 
@@ -229,17 +229,17 @@ def project_hits_onto_axis(hitmap, coordinates):
     """
     # calculate the projections
     x_projection = []
-    for row in hitmap:
-        x_projection.append(sum(row))
     y_projection = []
-    for row in hitmap.T:
+    for row in hitmap:
         y_projection.append(sum(row))
+    for row in hitmap.T:
+        x_projection.append(sum(row))
     # normalize the projections
-    x_bin_centers = coordinates[0][0]
+    x_bin_centers = coordinates[1][:, 0]
     x_bin_edges = calc_bin_edges_from_centers(x_bin_centers)
     x_bin_widths = x_bin_edges[1:] - x_bin_edges[:-1]
 
-    y_bin_centers = coordinates[1][:, 0]
+    y_bin_centers = coordinates[0][0]
     y_bin_edges = calc_bin_edges_from_centers(y_bin_centers)
     y_bin_widths = y_bin_edges[1:] - y_bin_edges[:-1]
     x_projection = np.array([val/sum(x_projection) for val in x_projection])
@@ -273,8 +273,8 @@ def fit_gauss_indipendently(hitmap, hitmap_coordinates):
             covariance matrix for the y-axis projection
     """
     x_proj, y_proj = project_hits_onto_axis(hitmap, hitmap_coordinates)
-    x_coord = hitmap_coordinates[0][0]
-    y_coord = hitmap_coordinates[1][:, 0]
+    y_coord = hitmap_coordinates[0][0]
+    x_coord = hitmap_coordinates[1][:, 0]
     x_popt, x_pcov = opt.curve_fit(norm.pdf, x_coord, x_proj, p0=(np.median(
                                    x_coord), 30*(x_coord[2]-x_coord[1])))
     y_popt, y_pcov = opt.curve_fit(norm.pdf, y_coord, y_proj, p0=(np.median(
@@ -289,11 +289,11 @@ def plot_hitmap_with_projections(hitmap, hitmap_coordinates, projections, x_popt
     spacing = 0.005
 
     rect_2D_hist = [left, bottom, width, height]
-    rect_x_hist = [left, bottom + height + spacing, width, 0.2]
-    rect_y_hist = [left + width + spacing, bottom, 0.2, height]
+    rect_y_hist = [left, bottom + height + spacing, width, 0.2]
+    rect_x_hist = [left + width + spacing, bottom, 0.2, height]
 
     # create figures and the axes
-    fig = plt.figure(1, figsize=(3, 10))
+    _ = plt.figure(1, figsize=(3, 10))
     ax_2dh = plt.axes(rect_2D_hist)
     ax_hx = plt.axes(rect_x_hist)
     ax_hy = plt.axes(rect_y_hist)
@@ -307,8 +307,8 @@ def plot_hitmap_with_projections(hitmap, hitmap_coordinates, projections, x_popt
     x_bins = calc_bin_edges_from_centers(x_bin_centers)
     y_bins = calc_bin_edges_from_centers(y_bin_centers)
     ax_2dh.set_aspect('equal')
-    ax_2dh.hist2d(hitmap_coordinates[1].flatten(),
-                  hitmap_coordinates[0].flatten(),
+    ax_2dh.hist2d(hitmap_coordinates[0].flatten(),
+                  hitmap_coordinates[1].flatten(),
                   bins=[y_bins, x_bins], weights=hitmap.T.flatten())
 
     # plot the x_axis histogram
@@ -349,7 +349,8 @@ if __name__ == "__main__":
     # the data.
     for (hpath, hmap, coordinates) in hitmaps:
         print("{} shape = {}".format(hpath, hmap.shape))
-        xparams, y_params, projections = fit_gauss_indipendently(hmap,
-                                                                 coordinates)
-        plot_hitmap_with_projections(hmap, coordinates)
+        xparams, yparams, projections = fit_gauss_indipendently(hmap,
+                                                                coordinates)
+        plot_hitmap_with_projections(hmap, coordinates, projections,
+                                     xparams[0], yparams[0])
 
