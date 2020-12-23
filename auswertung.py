@@ -11,13 +11,13 @@ from the sensor internal buffer.
 4) calculate and histogram the angular distribution of the muons detected by
 the sensor
 """
+from os import listdir
+from os.path import isfile, join
 import uproot as ur
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.optimize as opt
 from scipy.stats import norm
-from matplotlib.collections import LineCollection
-from matplotlib.colors import ListedColormap
 
 LS_DIR = 'LatencyScan'
 LScan_range_top = [format(elem, '03d') for elem in range(0, 157)]
@@ -59,6 +59,24 @@ def get_alignment_data(alignment_fpath):
                 file['Xray;1']['hMap_Sr90_{}_V0;1'.format(sensor)].allvalues
             )
     return sensor_data, sensor_names
+
+
+def get_latency_scan_data(latency_dir_path):
+    """ open and extract the data from all files in the latency_directory """
+    files_in_dir = [f for f in listdir(latency_dir_path)
+                    if isfile(join(latency_dir_path, f))]
+    delay_buffer_ind = [int(fname.split('.')[0]) for fname in files_in_dir]
+    latency_scan = []
+    # iterate over every file (a file holds the hitmap for all sensors with the
+    # same buffer index. The buffer index is encoded in the file name
+    for fname, delay_ind in zip(files_in_dir, delay_buffer_ind):
+        with ur.open(latency_dir_path+'/'+fname) as file:
+            names = ['hMap_Ag_C{}_V0'.format(i) for i in range(16)]
+            ldata = [file['Xray'][name].allvalues for name in names]
+            hitcount = sum([sum(sensor.flatten()) for sensor in ldata])
+            latency_scan.append((delay_ind, hitcount))
+    lindex, hits = (zip(*latency_scan))
+    return lindex, hits
 
 
 def calc_reweight_from_arrays(reference, unweighted_array):
