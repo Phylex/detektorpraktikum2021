@@ -7,6 +7,7 @@ from os import listdir
 from os.path import isfile, join
 import uproot as ur
 
+SNSR_DIRS = ['M4587-Top', 'M4520-Bottom']
 
 def get_alignment_data(alignment_fpath):
     """get the data for the alignment out of the root file
@@ -52,3 +53,30 @@ def get_latency_scan_data(latency_dir_path):
             latency_scan.append((delay_ind, hitcount))
     lindex, hits = (zip(*latency_scan))
     return lindex, hits
+
+
+def get_hits_from_muon_file(fpath):
+    """
+    extract the data of interest from the root file pointed to by fpath
+    """
+    rootf = ur.open(fpath)
+    events = rootf['Xray']['events']
+    npix = events['npix'].array()
+    proc = events['proc'].array()
+    pcol = events['pcol'].array()
+    prow = events['prow'].array()
+    pq = events['pq'].array()
+    return (npix, proc, pcol, prow, pq)
+
+
+def get_muon_hit_data(muon_dir):
+    """
+    find all relevant files for the muon hit data and read their contents
+    """
+    hit_files = []
+    for d in SNSR_DIRS:
+        for f in listdir(muon_dir+'/'+d):
+            fpath = join(muon_dir, d, f)
+            if isfile(fpath):
+                hit_files.append((fpath, get_hits_from_muon_file(fpath)))
+    return hit_files
