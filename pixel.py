@@ -4,14 +4,77 @@ with the input and output code to generate the data formats for plotting with
 matplotlib and calculations with numpy
 """
 import numpy as np
-import pytest
+import itertools as itt
 
 Point = tuple[float, float]
 
 
 class Sensor():
-    pass
+    def __init__(self, hitmaps: list[np.ndarray], chip_id: list[int],
+                 offset: tuple[np.ndarray, np.ndarray] = None):
+        """ produce the sensor datastructure from the hitmaps of the ROCs
 
+        produces a sensor with all the neccesary metadata from the hitmaps
+        read in from the rootfile hitmaps
+
+        Parameters
+        ----------
+        hitmaps : list[np.ndarray]
+            the hitmaps of the different readout chips. The index of the hitmap
+            needs to be the index of the chip ID in chip_ids otherwise the
+            mapping will be off
+        chip_id : list[int]
+            this is the ID of the ROC and is in the range 0 to 15
+        offset : tuple[np.ndarray, np.ndarray] or None
+            this is the offset and orientation (in the order in that they where
+            mentioned) of the sensor relative to some global
+            coordiante system (this is needed for the later alignment)
+        """
+        self.rocs = []
+        for hmap, index in zip(hitmaps, chip_id):
+            self.rocs.append(ReadoutChip(hmap, index))
+        if offset is not None:
+            self.orientation_matrix = offset[1]
+            self.offset = offset[0]
+        else:
+            self.orientation_matrix = np.array([[1, 0], [0, 1]])
+            self.offset = np.array([0, 0])
+
+    def __getitem__(self, index):
+        """ get the hitcount and q_value for a pixel given the ROC local indexes
+        """
+        if isinstance(index, list):
+            raise TypeError(
+                    "The index for this operation must be a list of length 3")
+        if len(index) != 3:
+            raise TypeError("The length of the index needs to be 3")
+        return self.rocs[index[0]][index[1:]]
+
+    def __setitem__(self, index, value):
+        """set the value of a pixel with roc local index
+
+        The [] syntax can now be used to write values to the pixels of the
+        sensor as long as they are using ROC local indexes for the pixels
+        this will be used to read in the events from the muon runs
+        """
+        self[index] = value
+
+    def hististogram_data(self, axis: str):
+        """ generate raw histogram data for the entire sensor """
+        roc_hists = [roc.histogramm_data(axis) for roc in self.rocs]
+        return np.concatenate(roc_hists)
+
+    def histogram(self, axis: str):
+        """ generate a (sensor) pixel perfec histogram of the entire sensor
+
+        generates a pixel perfect histogram of the hits on the sensor in
+        sensor local coordinates
+        """
+        hist_data = self.hististogram_data(axis)
+        borders = [roc.get_pixel_borders(axis) for roc in self.rocs]
+        borders = remove_duplicates_from_sorted_array(
+                np.sort(np.round(np.concatenate(borders), 3)))
+        return np.histogram(hist_data, borders)
 
 class ReadoutChip():
     def __init__(self, hitmap: np.ndarray, chip_nr: int):
@@ -28,15 +91,16 @@ class ReadoutChip():
             hitmap = hitmap.T
         x_coord, y_coord, dx, dy, roc_dim = generate_sensor_coordinates(hitmap)
         if chip_nr > 7:
-            vertical_offset = 2 * roc_dim[1]
-            horizontal_offset = (8 * roc_dim[0]) - ((chip_nr % 8) * roc_dim[0])
-            self.offset = (vertical_offset, horizontal_offset)
+            x_offset = (8 * roc_dim[0]) - ((chip_nr % 8) * roc_dim[0])
+            y_offset = 2 * roc_dim[1]
+            self.offset = (x_offset, y_offset)
             self.orientation_matrix = np.array([[1, 0], [0, -1]]) @ \
                 np.array([[-1, 0], [0, 1]])
         else:
-            vertical_offset = roc_dim[1] * chip_nr
-            horizontal_offset = roc_dim[0] * (chip_nr % 8)
-            self.offset = (vertical_offset, horizontal_offset)
+            y_offset = 0
+            x_offset = roc_dim[0] * chip_nr
+            self.offset = (x_offset, y_offset)
+            self.orientation_matrix = np.array([[1, 0], [0, 1]])
         pixel_positions = np.meshgrid(x_coord, y_coord)
         pixel_dimensions = np.meshgrid(dx, dy)
         self.pixels = []
@@ -48,8 +112,9 @@ class ReadoutChip():
             pixel_row = []
             for px, py, dx, dy, hitcount in zip(prow_x, prow_y, drow_x, drow_y,
                                                 hitrow):
-                pixel_row.append(pixel(hitcount, dx, dy, (px, py)))
+                pixel_row.append(Pixel(hitcount, dx, dy, (px, py)))
             self.pixels.append(pixel_row)
+        self.pixels = np.array(self.pixels, dtype=object)
 
     def __setitem__(self, pixel_index: tuple[int, int], pixel_hitcount):
         """ set the hitcount and qval of the pixel indexed by pixel_index
@@ -73,7 +138,7 @@ class ReadoutChip():
         """
         try:
             curpix = self.pixels[pixel_index[0]][pixel_index[1]]
-            self.pixels[pixel_index[0]][pixel_index[1]] = pixel(
+            self.pixels[pixel_index[0]][pixel_index[1]] = Pixel(
                     pixel_hitcount[0],
                     curpix.width,
                     curpix.height,
@@ -82,7 +147,7 @@ class ReadoutChip():
                     pixel_hitcount[1])
         except TypeError:
             curpix = self.pixels[pixel_index[0]][pixel_index[1]]
-            self.pixels[pixel_index[0]][pixel_index[1]] = pixel(
+            self.pixels[pixel_index[0]][pixel_index[1]] = Pixel(
                     pixel_hitcount,
                     curpix.width,
                     curpix.height,
@@ -111,7 +176,28 @@ class ReadoutChip():
         curpix = self.pixels[pixel_index[0]][pixel_index[1]]
         return (curpix.hits, curpix.q_val)
 
-    def normalized_hitmap(self):
+    def get_pixel_borders(self, axis: str):
+        """ get the sensor local borders of the readout chip (this uses
+        the generate_sensor_coordinates function
+        """
+        pixels = self.pixels.flatten()
+        if axis == 'x':
+            borders = np.array([pixel.borders()[0]
+                               for pixel in pixels]).flatten()
+            borders *= self.orientation_matrix[0, 0]
+            borders += self.offset[0]
+        elif axis == 'y':
+            borders = np.array([pixel.borders()[1]
+                               for pixel in pixels]).flatten()
+            borders *= self.orientation_matrix[1, 1]
+            borders += self.offset[1]
+        else:
+            raise ValueError("axis needs to be either 'x' or 'y'")
+        borders = remove_duplicates_from_sorted_array(
+                    np.sort(np.round(borders, 3)))
+        return borders
+
+    def hitmap(self, normalized=False):
         """ return the hitcount/area for each pixel as a hitmap
 
         Generate a list of tuples of positions and associated hitcounts/pixel
@@ -130,19 +216,55 @@ class ReadoutChip():
             local_position = self.pixels[i][j].get_position()
             global_position = (self.orientation_matrix @ local_position) \
                 + self.offset
-            hitmap.append((global_position,
-                           self.pixels[i][j].get_normalized_hitcount()))
+            if normalized:
+                hitmap.append((global_position,
+                               self.pixels[i][j].get_normalized_hitcount()))
+            else:
+                hitmap.append((global_position,
+                               self.pixels[i][j].hits))
         return hitmap
 
+    def histogramm_data(self, axis: str):
+        """ generate the raw hit data for a histogram
 
-class pixel():
+        Parameters
+        ----------
+        axis : str
+            the axis that the data should be generated for either 'x' or 'y'
+
+        Returns
+        -------
+        hits : list[float]
+            depending on the axis parameter either the x or y coordinate for
+            every hit. A hitcount of n > 1 will result in the coordinate being
+            repeated n number of times so that the raw data can be fed directly
+            to np.histogram or plt.hist
+        """
+
+        hitmap = self.hitmap()
+        if axis == 'x':
+            hits_per_pixel = np.array([[elem[0][0], elem[1]]
+                                       for elem in hitmap])
+        elif axis == 'y':
+            hits_per_pixel = np.array([[elem[0][1], elem[1]]
+                                       for elem in hitmap])
+        else:
+            raise ValueError("the axis has to be either 'x' or 'y'")
+        hits = []
+        for elem in hits_per_pixel:
+            for x in itt.repeat(elem[0], int(elem[1])):
+                hits.append(x)
+        return hits
+
+
+class Pixel():
     def __init__(self, hitcount: int, x_dim: float, y_dim: float,
-                 top_left_corner_coord: Point, q_val=None):
+                 bottom_left_corner_coord: Point, q_val=None):
         self.hits = hitcount
         self.width = x_dim
         self.height = y_dim
-        self.center = (top_left_corner_coord[0] + x_dim/2,
-                       top_left_corner_coord[1] + y_dim/2)
+        self.center = (bottom_left_corner_coord[0] + x_dim/2,
+                       bottom_left_corner_coord[1] + y_dim/2)
         self.q_val = q_val
 
     def get_normalized_hitcount(self):
@@ -151,6 +273,13 @@ class pixel():
         This method corrects the hitcount for the different sizes of the pixels
         """
         return self.hits / (self.width * self.height)
+
+    def borders(self):
+        """ get the x and y borders of the pixel """
+        return np.array([(self.center[0] - self.width/2,
+                         self.center[0] + self.width/2),
+                         (self.center[1] - self.height/2,
+                         self.center[1] + self.height/2)])
 
     def get_position(self):
         """ returns the position of the pixel center coordinates """
@@ -164,6 +293,17 @@ def strip_sensor_of_empty_pixels(roc_hitmap: np.ndarray):
     coordinates
     """
     return roc_hitmap[1:-1, 1:-1]
+
+
+def remove_duplicates_from_sorted_array(array):
+    """remove duplicate entries in a sorted array"""
+    cur = array[0]
+    newarr = [cur]
+    for elem in array[1:]:
+        if elem != cur:
+            newarr.append(elem)
+            cur = elem
+    return np.array(newarr)
 
 
 def generate_sensor_coordinates(roc_hitmap: np.ndarray):
@@ -200,6 +340,7 @@ def generate_sensor_coordinates(roc_hitmap: np.ndarray):
         the dimensions of the read out chip along it's x and y axis
     """
     # reorient the sensor if neccesary
+    
     i, j = roc_hitmap.shape
     if j > i:
         roc_hitmap = roc_hitmap.T
@@ -229,3 +370,19 @@ def test_generate_sensor_coordinates():
     assert len(dy) == 100
     assert dim[1] == yc[-1]+0.2
     assert dim[0] == xc[-1]+0.3
+
+def test_generate_x_histogram():
+    roc_hitmaps = [np.random.randint(0, 255, (100, 50)) for _ in range(16)]
+    hits = sum(np.array(roc_hitmaps).flatten())
+    chip_ids = range(16)
+    sensor = Sensor(roc_hitmaps, chip_ids)
+    data, bins = sensor.histogram('x')
+    assert len(bins) == 8*50+1
+    assert sum(data) == hits
+    data, bins = sensor.histogram('y')
+    assert len(bins) == 2 * 100 + 1
+    assert sum(data) == hits
+
+
+if __name__ == "__main__":
+    test_generate_x_histogram()
