@@ -19,6 +19,7 @@ from scipy.stats import norm
 import input as ip
 import pixel as px
 import plot as pt
+import fitting as ft
 
 LS_DIR = 'LatencyScan'
 
@@ -34,79 +35,16 @@ SNSR_DIRS = ['M4587-Top', 'M4520-Bottom']
 DELTA_Z = 0.0159
 
 
-
-
-
-
-def parametrize_transform(theta, t_x, t_y):
-    """
-    transforms the position of a set of points by translating them
-    and then rotating around the origin (2D)
-    """
-    def rot_mat(theta):
-        return np.array([[np.cos(theta), -np.sin(theta)],
-                         [np.sin(theta), np.cos(theta)]])
-
-    def parametrized_transform(points):
-        t_vec = np.array([t_x, t_y])
-        return np.array([(rot_mat(theta)@point) + t_vec for point in points])
-
-    return parametrized_transform
-
-
-def plot_coord_transform(p1, p2, tp):
-    """
-    Plot the transformed coordinates alongside the untransformed
-    coordinates
-    """
-    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(5, 2.5))
-    ax.scatter([p1[0, 0], p1[1, 0]], [p1[0, 1], p1[1, 1]], color='blue',
-               label='positions of the signal peaks on the Top sensor')
-    ax.scatter([p2[0, 0], p2[1, 0]], [p2[0, 1], p2[1, 1]], color='gold',
-               label='original positions of peaks on bottom sensor')
-    ax.scatter([tp[0, 0], tp[1, 0]], [tp[0, 1], tp[1, 1]],
-               color='orange',
-               label='Transformed points of the bottom sensor')
-    plt.grid()
-    plt.legend()
-    plt.savefig('coordinate_transformation_fit.svg')
-    plt.close(fig)
-
-
-def transform_pixel_coordinates(coordinates, transform_params):
-    """
-    Take the local coordinate system of a sensor and transform it into
-    the coordinate system of the telescope
-
-    The local coordinate system of the top sensor is taken to be the
-    coordinate system for the telescope
-    """
-    c_shape = coordinates[0].shape
-    x_coordinate = coordinates[0].flatten()
-    y_coordinate = coordinates[1].flatten()
-    rearranged_coordinates = np.array(list(
-        zip(x_coordinate, y_coordinate)))
-    tp = parametrize_transform(*transform_params)(
-            rearranged_coordinates)
-    tp = tp.flatten()
-    tx_coordinate = tp[::2]
-    ty_coordinate = tp[1::2]
-    tx_coordinate = tx_coordinate.reshape(c_shape)
-    ty_coordinate = ty_coordinate.reshape(c_shape)
-    tcoord = np.array([tx_coordinate, ty_coordinate])
-    return tcoord
-
-
 if __name__ == "__main__":
     # perform latency scan for the sensor
-    #for d in SNSR_DIRS:
-    #    latency, hits = get_latency_scan_data(LS_DIR+'/'+d)
-    #    plt.plot(latency, hits, linestyle='--')
-    #    plt.xlabel('index of ring buffer')
-    #    plt.ylabel('sum of hits on sensor')
-    #    plt.grid()
-    #    plt.savefig('latency_plot_for_{}.svg'.format(d))
-    #    plt.show()
+    for d in SNSR_DIRS:
+        latency, hits = ip.get_latency_scan_data(LS_DIR+'/'+d)
+        plt.plot(latency, hits, linestyle='--')
+        plt.xlabel('index of ring buffer')
+        plt.ylabel('sum of hits on sensor')
+        plt.grid()
+        plt.savefig('latency_plot_for_{}.svg'.format(d))
+        plt.show()
     # perform alignment of sensor
     # extract data from the alignment files we are only interested in the
     # hit maps, also remap and merge the data from the sensors into a hit
@@ -116,27 +54,31 @@ if __name__ == "__main__":
     for snsdir in SNSR_DIRS:
         for fpath in Align_files:
             PATH = '/'.join([ALIGNMENT_DIR, snsdir, fpath])
-            data, names = ip.get_alignment_data(PATH)
-            hitmap_hits = merge_data(names, data)
-            hitmaps.append([PATH, hitmap_hits,
-                           generate_coordinates_from_map(hitmap_hits)])
+            data, chip_ids = ip.get_alignment_data(PATH)
+            sensor = px.Sensor(data, chip_ids)
+            hitmaps.append([PATH, sensor])
 
     # now that we have the data we need to fit the Gaussian distributions to
     # the data.
     peaks = []
-    for (hpath, hmap, coordinates) in hitmaps:
-        print("{} shape = {}".format(hpath, hmap.shape))
-        xparams, yparams, projections = fit_gauss_indipendently(hmap,
-                                                                coordinates)
-        print(xparams, yparams)
-        opt_min = fit_2D_gauss(hmap, coordinates,
-                               (xparams[0], xparams[1],
-                                yparams[0], yparams[1]))
+    for hpath, sensor in hitmaps:
+        x_hist, x_bin_edges = sensor.histogram('x')
+        y_hist, y_bin_edges = sensor.histogram('y')
+        x_popt, x_pcov = ft.fit_gauss_normalized_histogram(x_hist, x_bin_edges)
+        y_popt, y_pcov = ft.fit_gauss_normalized_histogram(y_hist, y_bin_edges)
+        hit_hist, x_edges, y_edges = sensor.hitmap_histogram(density=True)
+        y_centers = (y_edges[1:] + y_edges[:-1])/2
+        x_centers = (x_edges[1:] + x_edges[:-1])/2
+        xx, yy = np.meshgrid(x_centers, y_centers, indexing='ij')
+        param_start = (x_popt[0], y_popt[0], x_popt[1], y_popt[1])
+        opt_min = opt.least_squares(lambda p: ft.gauss_2d(*p)(xx.flatten(),
+                                                              yy.flatten())
+                                    - hit_hist.flatten(), param_start)
         popt_2d = opt_min.x
-        plot_hitmap_with_projections(hmap, coordinates, projections,
-                                     xparams, yparams, popt_2d, hpath)
-        peaks.append((np.mean([xparams[0], popt_2d[0]]),
-                      np.mean([yparams[0], popt_2d[1]])))
+        pt.plot_hitmap_with_projections(hit_hist.T, x_edges, y_edges, x_hist,
+                                        y_hist, x_popt, y_popt, popt_2d, hpath)
+        peaks.append((np.mean([x_popt[0], popt_2d[0]]),
+                      np.mean([y_popt[0], popt_2d[1]])))
 
     # find the translation and rotation parameters to position the sensors
     # above each other
@@ -151,7 +93,7 @@ if __name__ == "__main__":
     # verify the result
     transform_params = opt_pars.x
     t_points = parametrize_transform(*transform_params)(sns2_points)
-    plot_coord_transform(sns1_points, sns2_points, t_points)
+    pt.plot_coord_transform(sns1_points, sns2_points, t_points)
 
     # now that we have the transformation parameters and the transformation
     # the transformation function we have to transform the grid of the bottom
@@ -177,29 +119,29 @@ if __name__ == "__main__":
 
     # now we have the properly aligned coordinate system for the sensors
     # and can start to read in the data
-    muon_hit_data = ip.get_muon_hit_data(MUON_DIR)
-    def filter_muon_hits(muon_hit_data):
-        # TODO: map the read out chip to the proper coordinates
-        npix = muon_hit_data[0]
-        proc = muon_hit_data[1]
-        pcol = muon_hit_data[2]
-        prow = muon_hit_data[3]
-        pq = muon_hit_data[4]
-        npix = filter(lambda p: p > 0, npix)
-        proc = filter(lambda p: len(p) > 0, proc)
-        pcol = filter(lambda p: len(p) > 0, pcol)
-        prow = filter(lambda p: len(p) > 0, prow)
-        pq = filter(lambda p: len(p) > 0, pq)
-        for npix, proc, pcol, prow, pq in zip(npix, proc, prow, pcol, pq):
-            for 
-            if npix > 1:
-                distinct_hits.append(proc[0], pcol[0], prow[0], pq[0])
-            else:
-                distinct_hits = []
-                for proc, pcol, prow, pq in zip(proc[1:], pcol[1:],
-                                                prow[1:], pq[1:]):
-                    np.sqrt
-
-
-
-
+#    muon_hit_data = ip.get_muon_hit_data(MUON_DIR)
+#    def filter_muon_hits(muon_hit_data):
+#        # TODO: map the read out chip to the proper coordinates
+#        npix = muon_hit_data[0]
+#        proc = muon_hit_data[1]
+#        pcol = muon_hit_data[2]
+#        prow = muon_hit_data[3]
+#        pq = muon_hit_data[4]
+#        npix = filter(lambda p: p > 0, npix)
+#        proc = filter(lambda p: len(p) > 0, proc)
+#        pcol = filter(lambda p: len(p) > 0, pcol)
+#        prow = filter(lambda p: len(p) > 0, prow)
+#        pq = filter(lambda p: len(p) > 0, pq)
+#        for npix, proc, pcol, prow, pq in zip(npix, proc, prow, pcol, pq):
+#            for 
+#            if npix > 1:
+#                distinct_hits.append(proc[0], pcol[0], prow[0], pq[0])
+#            else:
+#                distinct_hits = []
+#                for proc, pcol, prow, pq in zip(proc[1:], pcol[1:],
+#                                                prow[1:], pq[1:]):
+#                    np.sqrt
+#
+#
+#
+#
