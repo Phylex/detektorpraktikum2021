@@ -55,6 +55,8 @@ if __name__ == "__main__":
         for fpath in Align_files:
             PATH = '/'.join([ALIGNMENT_DIR, snsdir, fpath])
             data, chip_ids = ip.get_alignment_data(PATH)
+            for i, roc_hits in enumerate(data):
+                data[i] = px.strip_sensor_of_empty_pixels(roc_hits)
             sensor = px.Sensor(data, chip_ids)
             hitmaps.append([PATH, sensor])
 
@@ -62,8 +64,8 @@ if __name__ == "__main__":
     # the data.
     peaks = []
     for hpath, sensor in hitmaps:
-        x_hist, x_bin_edges = sensor.histogram('x')
-        y_hist, y_bin_edges = sensor.histogram('y')
+        x_hist, x_bin_edges = sensor.histogram('x', density=True)
+        y_hist, y_bin_edges = sensor.histogram('y', density=True)
         x_popt, x_pcov = ft.fit_gauss_normalized_histogram(x_hist, x_bin_edges)
         y_popt, y_pcov = ft.fit_gauss_normalized_histogram(y_hist, y_bin_edges)
         hit_hist, x_edges, y_edges = sensor.hitmap_histogram(density=True)
@@ -85,14 +87,14 @@ if __name__ == "__main__":
     print(peaks)
     sns1_points = np.array(peaks[0:2])
     sns2_points = np.array(peaks[2:])
-    errf = lambda p: np.sqrt(sum((sns1_points - parametrize_transform(*p)(
+    errf = lambda p: np.sqrt(sum((sns1_points - px.parametrize_transform(*p)(
         sns2_points))**2))
     opt_pars = opt.least_squares(errf, (0, 0, 0))
 
     # just to be sure the transformation should be visualized to optically
     # verify the result
     transform_params = opt_pars.x
-    t_points = parametrize_transform(*transform_params)(sns2_points)
+    t_points = px.parametrize_transform(*transform_params)(sns2_points)
     pt.plot_coord_transform(sns1_points, sns2_points, t_points)
 
     # now that we have the transformation parameters and the transformation
