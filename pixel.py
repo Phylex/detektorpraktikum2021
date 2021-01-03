@@ -452,6 +452,23 @@ def test_gen_2d_hist():
     assert len(data) == len(x_edges)-1
     assert len(data[0]) == len(y_edges)-1
 
+def test_hist_dimensions():
+    roc_hitmaps = [np.random.randint(0, 255, (100, 50)) for _ in range(16)]
+    # hits = sum(np.array(roc_hitmaps).flatten())
+    chip_ids = range(16)
+    sensor = Sensor(roc_hitmaps, chip_ids)
+    x_hist, x_edges = sensor.histogram('x')
+    y_hist, y_edges = sensor.histogram('y')
+    data, x_edges_2D, y_edges_2D = sensor.hitmap_histogram()
+    for e, e2d in zip(x_edges, x_edges_2D):
+        assert np.round(e, 3) == np.round(e2d, 3)
+    for edge, edge_2d in zip(y_edges, y_edges_2D):
+        assert np.round(edge, 3) == np.round(edge_2d, 3)
+    for row, dsum in zip(data, x_hist):
+        assert sum(row) == dsum
+    for row, dsum in zip(data.T, y_hist):
+        assert sum(row) == dsum
+
 
 if __name__ == "__main__":
     test_generate_x_histogram()
