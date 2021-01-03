@@ -9,6 +9,7 @@ import uproot as ur
 
 SNSR_DIRS = ['M4587-Top', 'M4520-Bottom']
 
+
 def get_alignment_data(alignment_fpath):
     """get the data for the alignment out of the root file
 
@@ -27,12 +28,12 @@ def get_alignment_data(alignment_fpath):
         sensor_names (list of strings): the names of the chips on the sensor
         index matched to the data in `sensor_data`
     """
-    sensor_names = ['C{}'.format(i) for i in range(0, 16)]
+    sensor_names = range(0, 16)
     sensor_data = []
     with ur.open(alignment_fpath) as file:
         for sensor in sensor_names:
             sensor_data.append(
-                file['Xray;1']['hMap_Sr90_{}_V0;1'.format(sensor)].allvalues
+                file['Xray;1']['hMap_Sr90_C{}_V0;1'.format(sensor)].allvalues
             )
     return sensor_data, sensor_names
 
