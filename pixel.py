@@ -10,6 +10,13 @@ Point = tuple[float, float]
 
 
 class Sensor():
+    """Class representing one entire sensor assembly
+
+    This class represents an entire sensor consisting of the 16 read
+    out chips and some meta information.
+    Two sensors are used stacked on top of each other to build the
+    muon telescope that should be analysed in the laboratory
+    """
     def __init__(self, hitmaps: list[np.ndarray], chip_id: list[int],
                  offset: tuple[np.ndarray, np.ndarray] = None):
         """ produce the sensor datastructure from the hitmaps of the ROCs
@@ -41,9 +48,25 @@ class Sensor():
             self.offset = np.array([0, 0])
 
     def __getitem__(self, index):
-        """ get the hitcount and q_value for a pixel given the ROC local indexes
+        """ get the pixel at the index
+
+        the pixel index has to be given as the roc local index together
+        with the number of the read out chip on which the pixel is
+        located
+
+        Parameters
+        ----------
+        index : tuple[int, int, int]
+            the index of the pixel. the first number is the chip ID of the
+            read out chip and the following two indicies are the roc-local
+            index of the pixel
+
+        Returns
+        -------
+        pixel : px.Pixel
+            the pixel indicated by the given indicies
         """
-        if isinstance(index, list):
+        if isinstance(index, (list, tuple)):
             raise TypeError(
                     "The index for this operation must be a list of length 3")
         if len(index) != 3:
@@ -61,20 +84,49 @@ class Sensor():
 
     def hististogram_data(self, axis: str):
         """ generate raw histogram data for the entire sensor """
-        roc_hists = [roc.histogramm_data(axis) for roc in self.rocs]
-        return np.concatenate(roc_hists)
+        roc_hits = [roc.histogramm_data(axis) for roc in self.rocs]
+        return np.concatenate(roc_hits)
 
-    def histogram(self, axis: str):
-        """ generate a (sensor) pixel perfec histogram of the entire sensor
+    def histogram(self, axis: str, density=False) \
+            -> tuple[np.ndarray, np.ndarray]:
+        """ generate a histogram of the entire sensor along one of it's axis
 
         generates a pixel perfect histogram of the hits on the sensor in
         sensor local coordinates
+
+        Parameters
+        ----------
+        axis : str
+            the axis along which to generate the histogram. Either 'x' or 'y'
+        density : bool
+            switch that decides if the histogram is normalized to area 1 or
+            given as "raw" histogram (with the amount of hits in each bin)
         """
         hist_data = self.hististogram_data(axis)
         borders = [roc.get_pixel_borders(axis) for roc in self.rocs]
         borders = remove_duplicates_from_sorted_array(
                 np.sort(np.round(np.concatenate(borders), 3)))
-        return np.histogram(hist_data, borders)
+        return np.histogram(hist_data, borders, density=density)
+
+    def hitmap_histogram(self, density: bool = False) -> np.ndarray:
+        """generates a 2D hitmap of the sensor
+        """
+        x_borders = [roc.get_pixel_borders('x') for roc in self.rocs[:8]]
+        x_borders = remove_duplicates_from_sorted_array(
+                np.sort(np.round(np.concatenate(x_borders), 3)))
+        y_borders = [roc.get_pixel_borders('y')
+                     for roc in [self.rocs[0], self.rocs[8]]]
+        y_borders = remove_duplicates_from_sorted_array(
+                np.sort(np.round(np.concatenate(y_borders), 3)))
+        hits = [roc.hitmap() for roc in self.rocs]
+        hits = np.array(hits, dtype=object)
+        hits = np.concatenate(hits)
+        hits = np.array([[np.round(e[0][0], 3), np.round(e[0][1], 3),
+                        np.round(e[1], 3)] for e in hits])
+        x, y, w = zip(*hits)
+        return np.histogram2d(x, y, bins=[x_borders, y_borders],
+                              weights=w, density=density)
+
 
 class ReadoutChip():
     def __init__(self, hitmap: np.ndarray, chip_nr: int):
@@ -198,10 +250,18 @@ class ReadoutChip():
         return borders
 
     def hitmap(self, normalized=False):
-        """ return the hitcount/area for each pixel as a hitmap
+        """ return the (normalized) hitcount for each pixel as a hitmap
 
-        Generate a list of tuples of positions and associated hitcounts/pixel
-        area
+        Generate a list of tuples of positions and associated hits.
+        if the normalized flag is set the hitcount is scaled to the pixel
+        area giving the hits/area measurement correcting for different sized
+        pixels
+
+        Parameters
+        ----------
+        normalized : bool
+            flag that decides if the hitcount per pixel is returned or
+            hits/area (flux) is returned for each pixel
 
         Returns
         -------
@@ -383,6 +443,16 @@ def test_generate_x_histogram():
     assert len(bins) == 2 * 100 + 1
     assert sum(data) == hits
 
+def test_gen_2d_hist():
+    roc_hitmaps = [np.random.randint(0, 255, (100, 50)) for _ in range(16)]
+    # hits = sum(np.array(roc_hitmaps).flatten())
+    chip_ids = range(16)
+    sensor = Sensor(roc_hitmaps, chip_ids)
+    data, x_edges, y_edges = sensor.hitmap_histogram()
+    assert len(data) == len(x_edges)-1
+    assert len(data[0]) == len(y_edges)-1
+
 
 if __name__ == "__main__":
     test_generate_x_histogram()
+    test_gen_2d_hist()
