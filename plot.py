@@ -2,8 +2,9 @@
 import matplotlib as mpl
 from matplotlib import cm
 from matplotlib import pyplot as plt
+from scipy.stats import norm
 import numpy as np
-import pixel as px
+# import pixel as px
 import fitting as ft
 
 
@@ -23,9 +24,55 @@ def plot_sensor_hit_histogram(axes: mpl.axes.Axes, hist: np.ndarray,
 
 def plot_2d_gauss_fit(axes: mpl.axes.Axes, popt_2d, x_centers: np.ndarray,
                       y_centers: np.ndarray):
+    """ plot the contours of the Gaussian fit on the hitmap """
     xx, yy = np.meshgrid(x_centers, y_centers)
-    axes.contour(xx, yy, ft.gauss_2D(*popt_2d)(xx, yy, cmap='coolwarm'))
+    axes.contour(xx, yy, ft.gauss_2d(*popt_2d)(xx, yy), cmap='coolwarm')
     axes.scatter(popt_2d[0], popt_2d[1], color='darkred')
+
+
+def plot_histogram(axes: mpl.axes.Axes, hist, popt, bin_edges: np.ndarray,
+                   axis: str):
+    """ plots the histogram of one of the axis projections
+
+    Plot the projection of histogram of hits. The plot is plotted vertically
+    if the axis label is given as 'y'
+
+    Parameters
+    ----------
+    axes : mpl.axes.Axes
+        the axes to plot the histogram into. The plot will be vertical if the
+        axis is specified to be 'y'
+    hist : np.ndarray
+        the histogramd hits
+    popt : np.ndarray
+        the parameters for the Gaussian that to be plotted over the hist
+    bin_edges : np.ndarray
+        the edges of the bins used for the histogram
+    axis : str
+        the axis on for which the results should be plotted (either 'x'
+        or 'y'). Plots vertically if 'y' is specified.
+    """
+    bin_centers = (bin_edges[1:] + bin_edges[:-1])/2
+    if axis == 'x':
+        axes.set_xlim([bin_edges[0], bin_edges[-1]])
+        axes.hist(bin_edges[:-1], bin_edges, weights=hist, density=True)
+        axes.plot(bin_centers, norm.pdf(bin_centers, *popt))
+    elif axis == 'y':
+        axes.set_ylim([bin_edges[0], bin_edges[-1]])
+        axes.hist(bin_edges[:-1], bin_edges, weights=hist, density=True,
+                  orientation='horizontal')
+        axes.plot(norm.pdf(bin_centers, *popt), bin_centers)
+    else:
+        raise ValueError("axis has to be either 'x' or 'y'")
+
+
+def plot_crosshairs(axes: mpl.axes.Axes, x_popt, y_popt, color: str = 'gray'):
+    """ plot the cross-hairs on the hitmap
+
+    Plot the cross-hairs that are the results from the fit of the projections
+    """
+    axes.vlines([x_popt[0]], 0, 1, color=color)
+    axes.hlines([y_popt[0]], 0, 1, color=color)
 
 
 def plot_hitmap_with_projections(hist_2d: np.ndarray, x_edges: np.ndarray,
@@ -50,7 +97,7 @@ def plot_hitmap_with_projections(hist_2d: np.ndarray, x_edges: np.ndarray,
         x_hist, y_hist = (y_hist, x_hist)
         x_popt, y_popt = (y_popt, x_popt)
         popt_2d = popt_2d[::-1]
-        hitmap_hist = hitmap_hist.T
+        hist_2d = hist_2d.T
 
     x_centers = (x_edges[1:] + x_edges[:-1])/2
     y_centers = (y_edges[1:] + y_edges[:-1])/2
@@ -84,26 +131,35 @@ def plot_hitmap_with_projections(hist_2d: np.ndarray, x_edges: np.ndarray,
     # plot the 2D histogram
     plot_sensor_hit_histogram(ax_2dh, hist_2d, x_edges, y_edges)
 
-    # plot the rings from the 2D fit
-    ax_2dh.contour(hitmap_coordinates[0].T,
-                   hitmap_coordinates[1].T,
-                   gauss_2D(*popt_2d)(hitmap_coordinates[0].T,
-                                      hitmap_coordinates[1].T),
-                   cmap='coolwarm')
-    ax_2dh.scatter(popt_2d[0], popt_2d[1], color='darkred')
+    # plot the rings from the 2D fit and the cross-hairs
+    plot_2d_gauss_fit(ax_2dh, popt_2d, x_centers, y_centers)
+    plot_crosshairs(ax_2dh, x_popt, y_popt)
 
     # plot the x_axis histogram
-    ax_hx.hist(x_bins[:-1], x_bins, weights=projections[0], )
-    ax_hx.plot(x_centers, norm.pdf(x_centers, *x_popt))
-    # plot vertical  line in 2D hist
-    ax_2dh.vlines([x_popt[0]], 0, 1, color='orange')
+    plot_histogram(ax_hx, x_hist, x_popt, x_edges, 'x')
 
     # plot the y_axis histogram
-    ax_hy.set_ylim([y_bins[0], y_bins[-1]])
-    ax_hy.hist(y_bins[:-1], y_bins, weights=projections[1], density=True,
-               orientation='horizontal')
-    ax_hy.plot(norm.pdf(y_centers, *y_popt), y_centers)
-    # plot the horizontal line from the independent fit
-    ax_2dh.hlines([y_popt[0]], 0, 1, color='orange')
+    plot_histogram(ax_hy, y_hist, y_popt, y_edges, 'y')
+
+    # save the finished plot
     plt.savefig(figpath+'_test.jpg')
+    plt.close(fig)
+
+
+def plot_coord_transform(p1, p2, tp):
+    """
+    Plot the transformed coordinates alongside the untransformed
+    coordinates
+    """
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(5, 2.5))
+    ax.scatter([p1[0, 0], p1[1, 0]], [p1[0, 1], p1[1, 1]], color='blue',
+               label='positions of the signal peaks on the Top sensor')
+    ax.scatter([p2[0, 0], p2[1, 0]], [p2[0, 1], p2[1, 1]], color='gold',
+               label='original positions of peaks on bottom sensor')
+    ax.scatter([tp[0, 0], tp[1, 0]], [tp[0, 1], tp[1, 1]],
+               color='orange',
+               label='Transformed points of the bottom sensor')
+    plt.grid()
+    plt.legend()
+    plt.savefig('coordinate_transformation_fit.svg')
     plt.close(fig)
