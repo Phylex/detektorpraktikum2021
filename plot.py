@@ -103,8 +103,8 @@ def plot_hitmap_with_projections(hist_2d: np.ndarray, x_edges: np.ndarray,
     y_centers = (y_edges[1:] + y_edges[:-1])/2
 
     # construct the shape of the axes
-    fig_width = 4
-    fig_height = fig_width / (2 * sensor_aspect_ratio)
+    fig_width = 10
+    fig_height = 3 * fig_width / sensor_aspect_ratio
 
     spacing = 0.005
     left, tdh_width = 0.1, 0.50

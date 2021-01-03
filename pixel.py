@@ -231,9 +231,10 @@ class Sensor():
         """
         self[index] = value
 
-    def hististogram_data(self, axis: str):
+    def hististogram_data(self, axis: str, normalized: bool = False):
         """ generate raw histogram data for the entire sensor """
-        roc_hits = [roc.histogramm_data(axis) for roc in self.rocs]
+        roc_hits = [roc.histogramm_data(axis, normalzed=normalized)
+                    for roc in self.rocs]
         return np.concatenate(roc_hits)
 
     def histogram(self, axis: str, density=False) \
@@ -251,11 +252,14 @@ class Sensor():
             switch that decides if the histogram is normalized to area 1 or
             given as "raw" histogram (with the amount of hits in each bin)
         """
-        hist_data = self.hististogram_data(axis)
+        hist_data = self.hististogram_data(axis, normalized=density)
+        coordinate = np.array([elem[0] for elem in hist_data])
+        weights = np.array([elem[1] for elem in hist_data])
         borders = [roc.get_pixel_borders(axis) for roc in self.rocs]
         borders = remove_duplicates_from_sorted_array(
                 np.sort(np.round(np.concatenate(borders), 3)))
-        return np.histogram(hist_data, borders, density=density)
+        return np.histogram(coordinate, borders, weights=weights,
+                            density=density)
 
     def hitmap_histogram(self, density: bool = False) \
             -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -286,11 +290,11 @@ class Sensor():
                      for roc in [self.rocs[0], self.rocs[8]]]
         y_borders = remove_duplicates_from_sorted_array(
                 np.sort(np.round(np.concatenate(y_borders), 3)))
-        hits = [roc.hitmap() for roc in self.rocs]
-        hits = np.array(hits, dtype=object)
-        hits = np.concatenate(hits)
-        hits = np.array([[np.round(e[0][0], 3), np.round(e[0][1], 3),
-                        np.round(e[1], 3)] for e in hits])
+        hits = []
+        for roc in self.rocs:
+            hitmap = np.array(roc.hitmap(density), dtype=object)
+            for elem in hitmap:
+                hits.append([elem[0][0], elem[0][1], elem[1]])
         x_coords, y_coords, weights = zip(*hits)
         return np.histogram2d(x_coords, y_coords, bins=[x_borders, y_borders],
                               weights=weights, density=density)
@@ -446,7 +450,7 @@ class ReadoutChip():
                                self.pixels[i][j].hits))
         return hitmap
 
-    def histogramm_data(self, axis: str):
+    def histogramm_data(self, axis: str, normalzed=False):
         """ generate the raw hit data for a histogram
 
         Parameters
@@ -461,9 +465,13 @@ class ReadoutChip():
             every hit. A hitcount of n > 1 will result in the coordinate being
             repeated n number of times so that the raw data can be fed directly
             to np.histogram or plt.hist
+
+        normalized : bool
+            flag that turns on the normalisation calculation that instead of
+            the hit count per pixel returns the hits per pixel area
         """
 
-        hitmap = self.hitmap()
+        hitmap = self.hitmap(normalized=normalzed)
         if axis == 'x':
             hits_per_pixel = np.array([[elem[0][0], elem[1]]
                                        for elem in hitmap])
@@ -472,11 +480,7 @@ class ReadoutChip():
                                        for elem in hitmap])
         else:
             raise ValueError("the axis has to be either 'x' or 'y'")
-        hits = []
-        for elem in hits_per_pixel:
-            for x_coord in itt.repeat(elem[0], int(elem[1])):
-                hits.append(x_coord)
-        return hits
+        return hits_per_pixel
 
 
 class Pixel():
@@ -526,21 +530,25 @@ def test_generate_x_histogram():
     hits = sum(np.array(roc_hitmaps).flatten())
     chip_ids = range(16)
     sensor = Sensor(roc_hitmaps, chip_ids)
-    data, bins = sensor.histogram('x')
+    data, bins = sensor.histogram('x', density=False)
     assert len(bins) == 8*50+1
     assert sum(data) == hits
-    data, bins = sensor.histogram('y')
+    data, bins = sensor.histogram('y', density=False)
     assert len(bins) == 2 * 100 + 1
     assert sum(data) == hits
 
 
 def test_gen_2d_hist():
     """ test the dimensionality of the sensor hitmap"""
+    from matplotlib import pyplot as plt
     roc_hitmaps = [np.random.randint(0, 255, (100, 50)) for _ in range(16)]
     # hits = sum(np.array(roc_hitmaps).flatten())
     chip_ids = range(16)
     sensor = Sensor(roc_hitmaps, chip_ids)
     data, x_edges, y_edges = sensor.hitmap_histogram()
+    xx, yy = np.meshgrid(x_edges, y_edges, indexing='ij')
+    plt.pcolormesh(xx, yy, data)
+    plt.show()
     assert len(data) == len(x_edges)-1
     assert len(data[0]) == len(y_edges)-1
 
