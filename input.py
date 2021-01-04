@@ -5,7 +5,9 @@ read in the data from the provided root files
 
 from os import listdir
 from os.path import isfile, join
+from os import path as pt
 import uproot as ur
+import transformations as tf
 
 SNSR_DIRS = ['M4587-Top', 'M4520-Bottom']
 
@@ -81,3 +83,27 @@ def get_muon_hit_data(muon_dir):
             if isfile(fpath):
                 hit_files.append((fpath, get_hits_from_muon_file(fpath)))
     return hit_files
+
+def sort_muon_data(data):
+    sorted_data = {}
+    paths = [datum[0] for datum in data]
+    runs = [pt.basename(path) for path in paths]
+    sensors = [pt.basename(pt.dirname(path)) for path in paths]
+    data = [datum[1] for datum in data]
+    for unique_sensor in set(sensors):
+        sorted_data[unique_sensor] = {}
+        for uniqe_run in set(runs):
+            sorted_data[unique_sensor][uniqe_run] = None
+    for run, sns, datum in zip(runs, sensors, data):
+        sorted_data[sns][run] = datum
+    return sorted_data
+
+
+if __name__ == "__main__":
+    m_data = get_muon_hit_data('Muon-Runs')
+    sorted_m_data = sort_muon_data(m_data)
+    relevant_hits, all_hits, all_events = tf.transform_data_to_needed_format(
+            sorted_m_data)
+    relevant_hits = [elem for elem in relevant_hits]
+    all_hits = len(list(all_hits))
+    all_events = len(list(all_events))

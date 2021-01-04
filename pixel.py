@@ -3,8 +3,8 @@ Module that contains the data structures that represent the sensors and pixels
 with the input and output code to generate the data formats for plotting with
 matplotlib and calculations with numpy
 """
-import itertools as itt
 import numpy as np
+from collections.abc import Callable
 
 Point = tuple[float, float]
 
@@ -91,9 +91,24 @@ def parametrize_transform(theta, t_x, t_y):
 
     def parametrized_transform(points):
         t_vec = np.array([t_x, t_y])
-        return np.array([(rot_mat(theta)@point) + t_vec for point in points])
+        return (rot_mat(theta)@points) + t_vec
 
     return parametrized_transform
+
+
+def config_telescope_transfrom(theta, t_x, t_y, t_z):
+    """ generate the transformation function that finally gets passed
+    to the telescope to do the transformation from the sensor to the
+    telescope coordinate system """
+    rot_mat = np.array([[np.cos(theta), -np.sin(theta), 0],
+                        [np.sin(theta), np.cos(theta), 0],
+                        [0, 0, 1]])
+    t_vec = np.array([t_x, t_y, t_z])
+
+    def tel_tf(point):
+        point = np.array([point[0], point[1], 0])
+        return (rot_mat @ point) + t_vec
+    return tel_tf
 
 
 def roc_to_sensor_transfrom(position: np.ndarray, rot_mat: np.ndarray,
@@ -103,23 +118,24 @@ def roc_to_sensor_transfrom(position: np.ndarray, rot_mat: np.ndarray,
     return rot_mat @ position + offset
 
 
-def sensor_to_telescope_transfrom(position: np.ndarray, rot_mat: np.ndarray,
-                                  offset: np.ndarray) -> np.ndarray:
-    """ function that transforms any coordinate from the sensor to a coordinate
-    in the telescope coordinate system """
-    position_3d = np.append(position, 0)
-    return position_3d @ rot_mat + offset
+def to_3d_coordinates(position):
+    return np.array([position[0], position[1], 0])
 
 
 class Telescope():
     """ Class representing the muon telescope """
-    def __init__(self, top_sensor, bottom_sensor, tf_func):
+    def __init__(self, top_sensor, bottom_sensor, tf_func: Callable[
+                 [float, float], [float, float, float]] = None):
         self.top_sensor = top_sensor
         self.bottom_sensor = bottom_sensor
-        self.transform_func = tf_func
-        self.transform_params = None
+        self.tf_func = None
+        self.hits = []
+        if tf_func is not None:
+            self.top_sensor.configure_transformation(to_3d_coordinates)
+            self.bottom_sensor.configure_transformation(tf_func)
 
-    def configure_bottom_transformation(self, tf_parameters):
+    def configure_bottom_transformation(self, tf_func: Callable[[float, float],
+                                        [float, float, float]]):
         """ configure the coordinate transformation from
         sensor to telescope coordinates
 
@@ -127,7 +143,55 @@ class Telescope():
         alignment of the bottom and top sensors. The transformation
         is applied to the coordinate system of the bottom sensor
         """
-        self.transform_params = tf_parameters
+        self.bottom_sensor.configure_transformation(tf_func)
+
+    def write_event(self, event):
+        for hit in event:
+            self[hit[0]] = hit[1]
+            self.hits.append(hit[0])
+
+    def clear(self, sparse=True):
+        if sparse:
+            if len(self.hits) > 0:
+                for hit in self.hits:
+                    self[hit] = (0, 0)
+                self.hits = []
+            else:
+                raise ValueError("A sparse clear should be performed but there\
+                        are no hits registered")
+        else:
+            self.top_sensor.clear()
+            self.bottom_sensor.clear()
+
+    def get_hits_on_top_sensor(self):
+        hit_indicies = [hit for hit in self.hits if hit[0] == 0]
+        return [self[hit] for hit in hit_indicies]
+
+    def get_hits_on_bottom_sensor(self):
+        hit_indicies = [hit for hit in self.hits if hit[0] == 1]
+        return [self[hit] for hit in hit_indicies]
+
+    def calc_centers_of_charge(self):
+        top_hits = self.get_hits_on_top_sensor()
+        bottom_hits = self.get_hits_on_bottom_sensor()
+        total_charge_top = sum([hit[2] for hit in top_hits])
+        total_charge_bottom = sum([hit[2] for hit in bottom_hits])
+        t_charge_weights = [hit[2]/total_charge_top for hit in top_hits]
+        b_charge_weights = [hit[2]/total_charge_bottom for hit in bottom_hits]
+        tcoc = np.add.reduce(np.array([h[0] * w for h, w in
+                                       zip(top_hits, t_charge_weights)]))
+        bcoc = np.add.reduce(np.array([h[0] * w for h, w in
+                                       zip(bottom_hits, b_charge_weights)]))
+        return np.array([tcoc]),\
+            np.array([bcoc])
+
+    def calc_angle(self, event):
+        self.write_event(event)
+        tcoc, bcoc = self.calc_centers_of_charge()
+        vec = bcoc - tcoc
+        angle = np.arccos(np.dot(vec, [0, 0, -1])/np.linalg.norm(vec))
+        self.clear()
+        return angle
 
     def __getitem__(self, index):
         if len(index) != 4:
@@ -136,10 +200,20 @@ class Telescope():
             return self.top_sensor[index[1:]]
         if index[0] == 1:
             pos, hits, q_val = self.bottom_sensor[index[1:]]
-            if self.transform_params is not None:
-                pos = self.transform_func(pos, *self.transform_params)
+            if self.tf_func is not None:
+                pos = self.tf_func(pos)
             return (pos, hits, q_val)
         raise ValueError("the 0th index need to be either '0' or '1'")
+
+    def __setitem__(self, index, value):
+        if len(index) != 4:
+            raise ValueError("the index needs to be of length 4")
+        if index[0] == 0:
+            self.top_sensor[index[1:]] = value
+        elif index[0] == 1:
+            self.bottom_sensor[index[1:]] = value
+        else:
+            raise ValueError("the first index needs to be either '0' or '1'")
 
 
 class Sensor():
@@ -151,8 +225,7 @@ class Sensor():
     muon telescope that should be analysed in the laboratory
     """
     def __init__(self, hitmaps: list[np.ndarray], chip_id: list[int],
-                 tf_function=None,
-                 tf_params: tuple[np.ndarray, np.ndarray] = None):
+                 tf_function=None):
         """ produce the sensor datastructure from the hitmaps of the ROCs
 
         produces a sensor with all the neccesary metadata from the hitmaps
@@ -172,7 +245,6 @@ class Sensor():
             coordiante system (this is needed for the later alignment)
         """
         self.transform_function = tf_function
-        self.transform_params = tf_params
         self.rocs = []
         for hmap, chip_nr in zip(hitmaps, chip_id):
             _, _, _, _, roc_dim = generate_sensor_coordinates(hmap)
@@ -211,15 +283,14 @@ class Sensor():
         pixel : px.Pixel
             the pixel indicated by the given indicies
         """
-        if isinstance(index, (list, tuple)):
+        if not isinstance(index, (list, tuple)):
             raise TypeError(
                     "The index for this operation must be a list of length 3")
         if len(index) != 3:
             raise TypeError("The length of the index needs to be 3")
         pos, hits, q_val = self.rocs[index[0]][index[1:]]
-        if self.transform_function is not None\
-                and self.transform_params is not None:
-            pos = self.transform_function(pos, *self.transform_params)
+        if self.transform_function is not None:
+            pos = self.transform_function(pos)
         return (pos, hits, q_val)
 
     def __setitem__(self, index, value):
@@ -229,7 +300,21 @@ class Sensor():
         sensor as long as they are using ROC local indexes for the pixels
         this will be used to read in the events from the muon runs
         """
-        self[index] = value
+        if len(index) != 3:
+            raise ValueError("the index of a sensor needs to be of length 3")
+        if index[0] >= 0 and index[0] < 16:
+            self.rocs[index[0]][index[1:]] = value
+        else:
+            raise ValueError("the 0th index has to be in range [0-15]")
+
+    def clear(self):
+        """ clear all hit related data from the sensor """
+        for roc in self.rocs:
+            roc.clear()
+
+    def configure_transformation(self, tf_func):
+        """ set the transfromation function of the index operator """
+        self.transform_function = tf_func
 
     def hististogram_data(self, axis: str, normalized: bool = False):
         """ generate raw histogram data for the entire sensor """
@@ -317,6 +402,7 @@ class ReadoutChip():
             generate_sensor_coordinates(hitmap)
         pixel_positions = np.meshgrid(x_coord, y_coord)
         pixel_dimensions = np.meshgrid(delta_x, delta_y)
+        self.shape = pixel_positions[0].shape
         self.pixels = []
         self.transfrom_function = tf_func
         self.trandform_params = tf_params
@@ -378,23 +464,24 @@ class ReadoutChip():
             the data from the sensor as it is considered to be 1 (we are in
             the second mode of operation as telescope)
         """
+        if len(pixel_index) != 2:
+            raise ValueError("the pixel index needs to have two entries")
         i, j = pixel_index
         try:
-            curpix = self.pixels[i][j]
-            self.pixels[i][j] = Pixel(
-                    pixel_hitcount[0],
-                    curpix.width,
-                    curpix.height,
-                    curpix.blc,
-                    pixel_hitcount[1])
-        # the pixel hitcount is a value not an array
+            self.pixels[i][j].hits = pixel_hitcount[0]
+            self.pixels[i][j].q_val = pixel_hitcount[1]
+        # if the pixel hitcount is a value not an array
         except TypeError:
-            curpix = self.pixels[pixel_index[0]][pixel_index[1]]
-            self.pixels[pixel_index[0]][pixel_index[1]] = Pixel(
-                    pixel_hitcount,
-                    curpix.width,
-                    curpix.height,
-                    curpix.blc)
+            self.pixels[i][j].hits = pixel_hitcount
+            self.pixels[i][j].q_val = 0
+
+    def clear(self):
+        """ clear the hits and q_vals of all pixels """
+        i_s, j_s = np.indices(self.shape)
+        i = i_s.flatten()
+        j_s = j_s.flatten()
+        for i, j in zip(i_s, j_s):
+            self[(i, j)] = (0, 0)
 
     def get_pixel_borders(self, axis: str):
         """ get the sensor local borders of the readout chip (this uses

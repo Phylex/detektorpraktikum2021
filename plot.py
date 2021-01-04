@@ -104,7 +104,7 @@ def plot_hitmap_with_projections(hist_2d: np.ndarray, x_edges: np.ndarray,
 
     # construct the shape of the axes
     fig_width = 10
-    fig_height = 3 * fig_width / sensor_aspect_ratio
+    fig_height = 2 * fig_width / sensor_aspect_ratio
 
     spacing = 0.005
     left, tdh_width = 0.1, 0.50
@@ -146,16 +146,19 @@ def plot_hitmap_with_projections(hist_2d: np.ndarray, x_edges: np.ndarray,
     plt.close(fig)
 
 
-def plot_coord_transform(p1, p2, tp):
+def plot_coord_transform(top_sns_points, bottom_sns_points, tp):
     """
     Plot the transformed coordinates alongside the untransformed
     coordinates
     """
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(5, 2.5))
-    ax.scatter([p1[0, 0], p1[1, 0]], [p1[0, 1], p1[1, 1]], color='blue',
+    ax.scatter([top_sns_points[0][0], top_sns_points[1][0]],
+               [top_sns_points[0][1], top_sns_points[1][1]], color='blue',
                label='positions of the signal peaks on the Top sensor')
-    ax.scatter([p2[0, 0], p2[1, 0]], [p2[0, 1], p2[1, 1]], color='gold',
-               label='original positions of peaks on bottom sensor')
+    ax.scatter([bottom_sns_points[0][0], bottom_sns_points[1][0]],
+               [bottom_sns_points[0][1], bottom_sns_points[1][1]],
+               color='gold', label='original positions of peaks on bottom\
+                                    sensor')
     ax.scatter([tp[0, 0], tp[1, 0]], [tp[0, 1], tp[1, 1]],
                color='orange',
                label='Transformed points of the bottom sensor')
