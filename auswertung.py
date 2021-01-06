@@ -53,9 +53,9 @@ if __name__ == "__main__":
     # hit maps, also remap and merge the data from the sensors into a hit
     # map for every sensor
     alignment_datasets = []
-    runs = []
-    for fpath in Align_files:
-        sensors = ['', '']
+    runs = [None, None]
+    for i, fpath in enumerate(Align_files):
+        sensors = [None, None]
         for snsdir in SNSR_DIRS:
             if snsdir == 'M4587-Top':
                 snsr = 0
@@ -63,10 +63,12 @@ if __name__ == "__main__":
                 snsr = 1
             PATH = '/'.join([ALIGNMENT_DIR, snsdir, fpath])
             data, chip_ids = ip.get_alignment_data(PATH)
-            for i, roc_hits in enumerate(data):
-                data[i] = px.strip_sensor_of_empty_pixels(roc_hits)
+            # strip the outer empty pixels from the data
+            for j, roc_hits in enumerate(data):
+                data[j] = px.strip_sensor_of_empty_pixels(roc_hits)
+
             sensors[snsr] = px.Sensor(data, chip_ids)
-        runs.append(px.Telescope(sensors[0], sensors[1]))
+        runs[i] = px.Telescope(sensors[0], sensors[1])
 
     # now that we have the data we need to fit the Gaussian distributions to
     # the data. the thing is that there are two measurements one for the left
@@ -103,17 +105,22 @@ if __name__ == "__main__":
     # find the translation and rotation parameters to position the sensors
     # above each other
     print(peaks)
+    sns_center = runs[0].bottom_sensor.center
     top_sns_points = peaks[0]
     bottom_sns_points = peaks[1]
+    bottom_sns_points = [px.mirror(point, sns_center, 'x')
+                         for point in bottom_sns_points]
 
     def errf(p):
+        """ the error function that is passed to least squares. it returns
+        an array of distances of the points to one another """
         transformed_points = np.array([px.parametrize_transform(*p)(point)
                                       for point in bottom_sns_points])
-        dist = 0
+        offsets = []
         for point, t_point in zip(top_sns_points, transformed_points):
-            dist += np.abs(point[0] - t_point[0])
-            dist += np.abs(point[1] - t_point[1])
-        return dist
+            offsets.append(point[0] - t_point[0])
+            offsets.append(point[1] - t_point[1])
+        return offsets
 
     opt_pars = opt.least_squares(errf, (0, 0, 0))
 
@@ -128,15 +135,17 @@ if __name__ == "__main__":
     # that can be passed the transformation function
     data = [np.zeros(ROCSHAPE) for _ in range(16)]
     indicies = range(16)
-    transform_func = px.config_telescope_transfrom(transform_params[0],
-                                                   transform_params[1],
-                                                   transform_params[2],
-                                                   -DELTA_Z)
-
     # build the telescope from the sensors
     top_sensor = px.Sensor(data, indicies)
     bottom_sensor = px.Sensor(data, indicies)
-    telescope = px.Telescope(top_sensor, bottom_sensor, transform_func)
+    telescope = px.Telescope(top_sensor, bottom_sensor)
+
+    tf_func = px.config_telescope_transfrom(transform_params[0],
+                                            transform_params[1],
+                                            transform_params[2],
+                                            -DELTA_Z,
+                                            telescope.bottom_sensor.center)
+    telescope.configure_coordinate_transform(tf_func)
 
     # read in and preprocess the muon data
     m_data = ip.get_muon_hit_data('Muon-Runs')

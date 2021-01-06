@@ -81,9 +81,8 @@ def generate_sensor_coordinates(roc_hitmap: np.ndarray):
 
 
 def parametrize_transform(theta, t_x, t_y):
-    """
-    transforms the position of a set of points by translating them
-    and then rotating around the origin (2D)
+    """ transforms a set of points from one coordinate systems to
+    another by first rotating and then translating them
     """
     def rot_mat(theta):
         return np.array([[np.cos(theta), -np.sin(theta)],
@@ -96,16 +95,33 @@ def parametrize_transform(theta, t_x, t_y):
     return parametrized_transform
 
 
-def config_telescope_transfrom(theta, t_x, t_y, t_z):
+def mirror(point, sensor_center, axis):
+    """ mirrors a point on the sensor along the x axis """
+    if axis == 'x':
+        i = 1
+    elif axis == 'y':
+        i = 0
+    else:
+        ValueError("The Axis must be either x or y")
+    mirror_matrix = np.identity(len(point))
+    mirror_matrix[i][i] = -1
+    translation = np.zeros(len(point))
+    translation[i] = 2 * sensor_center[i]
+    return (mirror_matrix @ point) + translation
+
+
+def config_telescope_transfrom(theta, t_x, t_y, t_z, sensor_center):
     """ generate the transformation function that finally gets passed
-    to the telescope to do the transformation from the sensor to the
-    telescope coordinate system """
+    to the telescope to do the transformation from the sensor coordinates to
+    the telescope coordinate system """
+
     rot_mat = np.array([[np.cos(theta), -np.sin(theta), 0],
                         [np.sin(theta), np.cos(theta), 0],
                         [0, 0, 1]])
     t_vec = np.array([t_x, t_y, t_z])
 
     def tel_tf(point):
+        point = mirror(point, sensor_center, 'x')
         point = np.array([point[0], point[1], 0])
         return (rot_mat @ point) + t_vec
     return tel_tf
@@ -134,8 +150,8 @@ class Telescope():
             self.top_sensor.configure_transformation(to_3d_coordinates)
             self.bottom_sensor.configure_transformation(tf_func)
 
-    def configure_bottom_transformation(self, tf_func: Callable[[float, float],
-                                        [float, float, float]]):
+    def configure_coordinate_transform(self, tf_func: Callable[[float, float],
+                                       [float, float, float]]):
         """ configure the coordinate transformation from
         sensor to telescope coordinates
 
@@ -144,6 +160,7 @@ class Telescope():
         is applied to the coordinate system of the bottom sensor
         """
         self.bottom_sensor.configure_transformation(tf_func)
+        self.top_sensor.configure_transformation(to_3d_coordinates)
 
     def write_event(self, event):
         for hit in event:
@@ -191,7 +208,7 @@ class Telescope():
         vec = bcoc - tcoc
         angle = np.arccos(np.dot(vec, [0, 0, -1])/np.linalg.norm(vec))
         self.clear()
-        return angle
+        return angle[0]
 
     def __getitem__(self, index):
         if len(index) != 4:
@@ -228,7 +245,7 @@ class Sensor():
                  tf_function=None):
         """ produce the sensor datastructure from the hitmaps of the ROCs
 
-        produces a sensor with all the neccesary metadata from the hitmaps
+        produces a sensor with all the necessary meta data from the hitmaps
         read in from the rootfile hitmaps
 
         Parameters
@@ -242,7 +259,7 @@ class Sensor():
         offset : tuple[np.ndarray, np.ndarray] or None
             this is the offset and orientation (in the order in that they where
             mentioned) of the sensor relative to some global
-            coordiante system (this is needed for the later alignment)
+            coordinate system (this is needed for the later alignment)
         """
         self.transform_function = tf_function
         self.rocs = []
@@ -263,6 +280,10 @@ class Sensor():
             readout_chip = ReadoutChip(hmap, chip_nr, roc_to_sensor_transfrom,
                                        tf_params)
             self.rocs.append(readout_chip)
+        x_borders, y_borders = self.get_pixel_grid_borders()
+        self.corners = np.array([[min(x_borders), min(y_borders)],
+                                [max(x_borders), max(y_borders)]])
+        self.center = np.array([max(x_borders)/2, max(y_borders)/2])
 
     def __getitem__(self, index):
         """ get the pixel at the index
@@ -313,7 +334,7 @@ class Sensor():
             roc.clear()
 
     def configure_transformation(self, tf_func):
-        """ set the transfromation function of the index operator """
+        """ set the transformation function of the index operator """
         self.transform_function = tf_func
 
     def hististogram_data(self, axis: str, normalized: bool = False):
@@ -321,6 +342,18 @@ class Sensor():
         roc_hits = [roc.histogramm_data(axis, normalzed=normalized)
                     for roc in self.rocs]
         return np.concatenate(roc_hits)
+
+    def get_pixel_grid_borders(self):
+        """ get the coordinates of the horizontal and vertical lines
+        that split the sensor into the individual pixels """
+        x_borders = [roc.get_pixel_borders('x') for roc in self.rocs[:8]]
+        x_borders = remove_duplicates_from_sorted_array(
+                np.sort(np.round(np.concatenate(x_borders), 3)))
+        y_borders = [roc.get_pixel_borders('y')
+                     for roc in [self.rocs[0], self.rocs[8]]]
+        y_borders = remove_duplicates_from_sorted_array(
+                np.sort(np.round(np.concatenate(y_borders), 3)))
+        return x_borders, y_borders
 
     def histogram(self, axis: str, density=False) \
             -> tuple[np.ndarray, np.ndarray]:
@@ -368,13 +401,7 @@ class Sensor():
         y_edges : np.ndarray
             the edges of the bins on the y axis
         """
-        x_borders = [roc.get_pixel_borders('x') for roc in self.rocs[:8]]
-        x_borders = remove_duplicates_from_sorted_array(
-                np.sort(np.round(np.concatenate(x_borders), 3)))
-        y_borders = [roc.get_pixel_borders('y')
-                     for roc in [self.rocs[0], self.rocs[8]]]
-        y_borders = remove_duplicates_from_sorted_array(
-                np.sort(np.round(np.concatenate(y_borders), 3)))
+        x_borders, y_borders = self.get_pixel_grid_borders()
         hits = []
         for roc in self.rocs:
             hitmap = np.array(roc.hitmap(density), dtype=object)

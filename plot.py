@@ -11,7 +11,7 @@ import fitting as ft
 def plot_sensor_hit_histogram(axes: mpl.axes.Axes, hist: np.ndarray,
                               x_edges: np.ndarray, y_edges: np.ndarray):
     """ plot the hitmap of the sensor into a given axes
-
+.
     plots the hitmap of the sensor into a provided axes instance and
     annotates the plot accordingly
     """
@@ -151,7 +151,7 @@ def plot_coord_transform(top_sns_points, bottom_sns_points, tp):
     Plot the transformed coordinates alongside the untransformed
     coordinates
     """
-    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(5, 2.5))
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 5))
     ax.scatter([top_sns_points[0][0], top_sns_points[1][0]],
                [top_sns_points[0][1], top_sns_points[1][1]], color='blue',
                label='positions of the signal peaks on the Top sensor')
